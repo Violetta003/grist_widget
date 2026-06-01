@@ -1,0 +1,213 @@
+<html>
+<head>
+  <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      color: #333;
+      padding: 10px;
+      margin: 0;
+    }
+
+    .change-log-entry {
+      background: #f9f9f9;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    .meta-info {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-size: 11px;
+      color: #666;
+      border-bottom: 1px dashed #ddd;
+      padding-bottom: 4px;
+    }
+
+    .time-ago {
+      cursor: pointer;
+      font-weight: 600;
+      color: #2b6cb0;
+    }
+
+    .time-ago:hover {
+      text-decoration: underline;
+    }
+
+    .field-container {
+      margin-top: 6px;
+    }
+
+    .field-name {
+      font-weight: bold;
+      color: #2d3748;
+      background: #edf2f7;
+      padding: 2px 6px;
+      border-radius: 4px;
+      display: inline-block;
+      margin-bottom: 6px;
+    }
+
+    .diff-box {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .old-value, .new-value {
+      padding: 6px 8px;
+      border-radius: 4px;
+      word-break: break-all;
+      font-family: monospace;
+      font-size: 12px;
+    }
+
+    .old-value {
+      background: #ffeeed;
+      color: #c53030;
+      border: 1px solid #fed7d7;
+    }
+
+    .new-value {
+      background: #f0fff4;
+      color: #2f855a;
+      border: 1px solid #c6f6d5;
+    }
+    
+    .empty-msg {
+      color: #718096;
+      text-align: center;
+      margin-top: 20px;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+
+  <template id="ChangeLogEntryTemplate">
+    <div class="change-log-entry">
+      <div class="meta-info">
+        <span class="time-ago" title="Нажмите, чтобы увидеть точное время"></span>
+        <span class="timestamp" style="display: none;"></span>
+      </div>
+      <div class="field-container">
+        <div class="field-name"></div>
+        <div class="diff-box">
+          <div class="old-value"></div>
+          <div class="new-value"></div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <div id="ChangeLog"><div class="empty-msg">Ожидание выбора записи...</div></div>
+
+  <script>
+    window.addEventListener('load', () => {
+      const container = document.getElementById('ChangeLog');
+      const template = document.getElementById('ChangeLogEntryTemplate');
+
+      window.grist.ready({
+        requiredAccess: 'read table',
+        columns: ['change_log']
+      });
+
+      function durationAgo(timestamp) {
+        if (!timestamp) return '';
+        const timeAgo = new Date().getTime() - new Date(timestamp).getTime();
+        const secondsAgo = Math.floor(timeAgo / 1000);
+        const minutesAgo = Math.floor(secondsAgo / 60);
+        const hoursAgo = Math.floor(minutesAgo / 60);
+        const daysAgo = Math.floor(hoursAgo / 24);
+
+        if (daysAgo > 0) return `${daysAgo} дн. назад`;
+        if (hoursAgo > 0) return `${hoursAgo} ч. назад`;
+        if (minutesAgo > 0) return `${minutesAgo} мин. назад`;
+        return `${secondsAgo > 0 ? secondsAgo : 0} сек. назад`;
+      }
+
+      function formatValue(val) {
+        if (val === null || val === undefined || val === '') return 'пусто';
+        if (typeof val === 'object') return JSON.stringify(val);
+        return String(val);
+      }
+
+      window.grist.onRecord(record => {
+        container.innerHTML = ''; 
+        
+        if (!record) {
+          container.innerHTML = '<div class="empty-msg">Запись не выбрана</div>';
+          return;
+        }
+
+        const mapped = window.grist.mapColumnNames(record);
+        
+        // Защита от пустой строки лога
+        if (!mapped || !mapped.change_log || mapped.change_log === '[]') {
+          container.innerHTML = '<div class="empty-msg">История изменений пуста</div>';
+          return;
+        }
+
+        try {
+          const changeLog = JSON.parse(mapped.change_log);
+
+          if (!Array.isArray(changeLog) || changeLog.length === 0) {
+            container.innerHTML = '<div class="empty-msg">История изменений пуста</div>';
+            return;
+          }
+
+          changeLog.forEach((logEntry, index) => {
+            // Безопасное извлечение предыдущего состояния
+            const previousSnapshot = (index < changeLog.length - 1) ? (changeLog[index + 1].snapshot || {}) : {};
+            const currentSnapshot = logEntry.snapshot || {};
+            const changeTime = logEntry.timestamp ? new Date(logEntry.timestamp).toLocaleString() : 'Неизвестно';
+            const timeText = durationAgo(logEntry.timestamp);
+
+            if (!logEntry.changed || !Array.isArray(logEntry.changed)) return;
+
+            logEntry.changed.forEach((field) => {
+              const oldValue = previousSnapshot[field];
+              const newValue = currentSnapshot[field];
+
+              const entry = template.content.cloneNode(true);
+              const timeAgoElement = entry.querySelector('.time-ago');
+              const timestampElement = entry.querySelector('.timestamp');
+
+              timeAgoElement.textContent = timeText;
+              timestampElement.textContent = changeTime;
+
+              // Переключение времени по клику
+              timeAgoElement.addEventListener('click', () => {
+                timeAgoElement.style.display = 'none';
+                timestampElement.style.display = 'inline';
+              });
+              timestampElement.addEventListener('click', () => {
+                timestampElement.style.display = 'none';
+                timeAgoElement.style.display = 'inline';
+              });
+
+              entry.querySelector('.field-name').textContent = field;
+              entry.querySelector('.old-value').textContent = `Было: ${formatValue(oldValue)}`;
+              entry.querySelector('.new-value').textContent = `Стало: ${formatValue(newValue)}`;
+
+              container.appendChild(entry);
+            });
+          });
+
+          if (container.children.length === 0) {
+            container.innerHTML = '<div class="empty-msg">Изменения не зафиксированы</div>';
+          }
+
+        } catch (e) {
+          container.innerHTML = `<div class="empty-msg" style="color: red;">Ошибка обработки лога: ${e.message}</div>`;
+        }
+      });
+    });
+  </script>
+</body>
+</html>
