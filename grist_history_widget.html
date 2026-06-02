@@ -1,171 +1,278 @@
-<html>
+<!DOCTYPE html>
+<html lang="ru">
 <head>
+  <meta charset="UTF-8">
+  <title>История изменений</title>
   <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
   <style>
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 13px;
-      color: #333;
-      padding: 12px;
-      margin: 0;
-      background: #fcfcfc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      margin: 15px;
+      background-color: #fcfcfc;
+      color: #2c3e50;
     }
-    .log-item {
-      background: #ffffff;
-      border: 1px solid #e2e8f0;
-      border-radius: 6px;
-      padding: 12px;
+    .log-card {
+      background: white;
+      border: 1px solid #e6e9ed;
+      border-radius: 8px;
+      padding: 16px;
       margin-bottom: 12px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+      box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+      transition: transform 0.2s;
+    }
+    .log-card:hover {
+      border-color: #d3d7dc;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.04);
     }
     .log-header {
       display: flex;
       justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px dashed #f0f2f5;
+      padding-bottom: 8px;
+      margin-bottom: 12px;
+    }
+    .timestamp {
+      font-size: 13px;
+      color: #7f8c8d;
+      display: flex;
+      flex-direction: column;
+    }
+    .time-ago {
       font-size: 11px;
-      color: #718096;
-      margin-bottom: 8px;
-      border-bottom: 1px solid #edf2f7;
-      padding-bottom: 6px;
+      color: #bdc3c7;
+      margin-top: 2px;
     }
     .sn-badge {
-      font-weight: bold;
-      background: #e2e8f0;
-      color: #4a5568;
-      padding: 1px 6px;
-      border-radius: 4px;
-    }
-    .time-stamp {
-      cursor: pointer;
-    }
-    .change-row {
-      margin-top: 8px;
-    }
-    .field-tag {
-      font-weight: 600;
-      color: #4a5568;
+      background: #34495e;
+      color: white;
+      padding: 3px 8px;
+      border-radius: 20px;
       font-size: 12px;
-      margin-bottom: 4px;
-      display: inline-block;
+      font-weight: bold;
     }
-    .diff-container {
+    .change-line {
       display: flex;
-      gap: 6px;
       align-items: center;
+      margin: 6px 0;
+      font-size: 14px;
+      flex-wrap: wrap;
+    }
+    .field-label {
+      font-weight: 600;
+      min-width: 140px;
+      color: #34495e;
     }
     .val-box {
-      flex: 1;
-      padding: 4px 8px;
+      padding: 2px 8px;
       border-radius: 4px;
-      font-family: monospace;
-      font-size: 12px;
-      word-break: break-all;
+      display: inline-block;
+      font-size: 13px;
     }
-    .val-old {
-      background: #fff5f5;
-      color: #c53030;
-      border: 1px solid #fed7d7;
+    .old-val {
+      background-color: #fde8e8;
+      color: #e74c3c;
+      text-decoration: line-through;
     }
-    .val-new {
-      background: #f0fff4;
-      color: #2f855a;
-      border: 1px solid #c6f6d5;
+    .new-val {
+      background-color: #edfbf3;
+      color: #27ae60;
+      font-weight: 500;
     }
     .arrow {
-      color: #a0aec0;
+      color: #95a5a6;
+      margin: 0 8px;
       font-weight: bold;
     }
-    .empty-state {
+    .no-data {
       text-align: center;
-      color: #a0aec0;
-      margin-top: 30px;
+      color: #95a5a6;
+      padding: 40px 20px;
       font-style: italic;
+    }
+    .loading {
+      text-align: center;
+      color: #3498db;
+      padding: 20px;
     }
   </style>
 </head>
 <body>
 
-  <div id="HistoryContainer">
-    <div class="empty-state">Ожидание выбора строки...</div>
+  <div id="history-container">
+    <div class="loading">Загрузка истории и расшифровка связей...</div>
   </div>
 
   <script>
-    const container = document.getElementById('HistoryContainer');
+    const labelCache = {};
 
-    window.grist.ready({
-      requiredAccess: 'read table',
-      columns: ['change_log']
-    });
+    // Карта перевода системных имен колонок в понятные русские названия
+    const fieldTitles = {
+      "SN": "Серийный номер",
+      "type": "Тип устройства",
+      "lab": "Лаборатория",
+      "room": "Комната",
+      "state": "Состояние",
+      "grippers": "Захваты (Grippers)",
+      "No": "Номер (No)",
+      "laptop": "Ноутбук",
+      "scanner": "Сканер",
+      "floor": "Этаж",
+      "R_model": "Модель робота",
+      "rented": "В аренде"
+    };
 
-    function formatTime(isoString) {
-      if (!isoString) return 'Неизвестно';
-      const d = new Date(isoString);
-      return d.toLocaleString();
+    // Карта связи колонок с их реальными таблицами в вашей базе Grist
+    const referenceTables = {
+      "id": "Table1", "SN": "Table1", "No": "Table1", "SN__": "Table1",
+      "type": "Table12",
+      "lab": "Table11",
+      "room": "Table10",
+      "state": "Table13",
+      "grippers": "Table6",
+      "laptop": "Table4",
+      "scanner": "Table5",
+      "floor": "Table21",
+      "R_model": "Table20",
+      "rented": "Table3"
+    };
+
+    // Функция красивого вывода относительного времени (например, "5 минут назад")
+    function timeAgo(date) {
+      const seconds = Math.floor((new Date() - date) / 1000);
+      let interval = Math.floor(seconds / 31536000);
+      if (interval >= 1) return interval + " л. назад";
+      interval = Math.floor(seconds / 2592000);
+      if (interval >= 1) return interval + " мес. назад";
+      interval = Math.floor(seconds / 86400);
+      if (interval >= 1) return interval + " дн. назад";
+      interval = Math.floor(seconds / 3600);
+      if (interval >= 1) return interval + " ч. назад";
+      interval = Math.floor(seconds / 60);
+      if (interval >= 1) return interval + " мин. назад";
+      return "только что";
     }
 
-    function formatVal(v) {
-      if (v === null || v === undefined || v === '') return 'пусто';
-      if (typeof v === 'object') return JSON.stringify(v);
-      return String(v);
-    }
+    // Запрос текстового названия из связанной таблицы Grist по ID
+    async function fetchLabel(tableId, rowId) {
+      if (!rowId || rowId === 'None' || rowId === 'null') return 'пусто';
+      
+      // Если это булево значение (true/false) из Table3
+      if (rowId === true || rowId === 'true') return 'Да';
+      if (rowId === false || rowId === 'false') return 'Нет';
 
-    window.grist.onRecord(record => {
-      container.innerHTML = '';
-      if (!record) {
-        container.innerHTML = '<div class="empty-state">Строка не выбрана</div>';
-        return;
+      const cacheKey = `${tableId}_${rowId}`;
+      if (labelCache[cacheKey]) return labelCache[cacheKey];
+
+      try {
+        const rowData = await grist.docApi.fetchSelectedRows(tableId, { id: [Number(rowId)] });
+        if (rowData && rowData.id && rowData.id.length > 0) {
+          const colNames = Object.keys(rowData).filter(k => k !== 'id' && !k.startsWith('_'));
+          
+          // Ищем колонку с человеческим текстом (Name, Title или первую попавшуюся)
+          const bestCol = colNames.find(c => c.toLowerCase().includes('name')) || 
+                          colNames.find(c => c.toLowerCase().includes('title')) || 
+                          colNames[0];
+          
+          let label = rowData[bestCol][0];
+          if (label === undefined || label === null) label = `Строка #${rowId}`;
+          
+          labelCache[cacheKey] = label;
+          return label;
+        }
+      } catch (e) {
+        console.error("Ошибка запроса к " + tableId, e);
       }
+      return `Строка #${rowId}`;
+    }
 
-      const mapped = window.grist.mapColumnNames(record);
-      if (!mapped || !mapped.change_log || mapped.change_log === '[]') {
-        container.innerHTML = '<div class="empty-state">Нет истории изменений для этой строки</div>';
+    // Форматирование значения (текст или вызов функции связи)
+    async function getHumanValue(fieldName, val) {
+      if (val === null || val === undefined || val === 'None' || val === 'null') {
+        return '<span style="color:#aaa">пусто</span>';
+      }
+      if (Array.isArray(val)) {
+        if (val[0] === "L") { // Обработка списков связей ReferenceList
+          const cleanIds = val.slice(1);
+          const labels = [];
+          for (const id of cleanIds) {
+            labels.push(await fetchLabel(referenceTables[fieldName], id));
+          }
+          return labels.join(', ') || 'пусто';
+        }
+        return JSON.stringify(val);
+      }
+      
+      if (referenceTables[fieldName]) {
+        return await fetchLabel(referenceTables[fieldName], val);
+      }
+      return val;
+    }
+
+    grist.ready({ requiredAccess: 'read table' });
+
+    grist.onRecord(async function(record) {
+      const container = document.getElementById('history-container');
+      container.innerHTML = '';
+
+      const rawLog = record.change_log;
+      if (!rawLog || rawLog === "[]") {
+        container.innerHTML = '<div class="no-data">История изменений пуста</div>';
         return;
       }
 
       try {
-        const logs = JSON.parse(mapped.change_log);
+        // ИСПРАВЛЕНО: используем стандартный JSON.parse вместо Python-метода
+        const logs = typeof rawLog === 'string' ? JSON.parse(rawLog) : rawLog;
+        
         if (!Array.isArray(logs) || logs.length === 0) {
-          container.innerHTML = '<div class="empty-state">Нет истории изменений для этой строки</div>';
+          container.innerHTML = '<div class="no-data">История изменений пуста</div>';
           return;
         }
 
-        logs.forEach(entry => {
-          const itemEl = document.createElement('div');
-          itemEl.className = 'log-item';
+        for (const entry of logs) {
+          const card = document.createElement('div');
+          card.className = 'log-card';
+          
+          const dateObj = new Date(entry.timestamp);
+          const timeStr = dateObj.toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+          const agoStr = timeAgo(dateObj);
+          const snStr = entry.sn !== undefined ? entry.sn : '—';
 
-          // Шапка с SN и временем
-          const headerEl = document.createElement('div');
-          headerEl.className = 'log-header';
-          headerEl.innerHTML = `
-            <span>Строка SN: <span class="sn-badge">${entry.sn || '—'}</span></span>
-            <span class="time-stamp">${formatTime(entry.timestamp)}</span>
-          `;
-          itemEl.appendChild(headerEl);
-
-          // Перечисление изменений
+          let changesHtml = '';
           const changes = entry.changes || {};
-          Object.keys(changes).forEach(fieldName => {
-            const changeRow = document.createElement('div');
-            changeRow.className = 'change-row';
 
-            const oldText = formatVal(changes[fieldName].old);
-            const newText = formatVal(changes[fieldName].new);
+          // Генерируем строки изменений асинхронно
+          for (const [field, valObj] of Object.entries(changes)) {
+            const fieldTitle = fieldTitles[field] || field;
+            const oldText = await getHumanValue(field, valObj.old);
+            const newText = await getHumanValue(field, valObj.new);
+            
+            changesHtml += `
+              <div class="change-line">
+                <span class="field-label">${fieldTitle}</span>
+                <span class="val-box old-val">${oldText}</span>
+                <span class="arrow">→</span>
+                <span class="val-box new-val">${newText}</span>
+              </div>`;
+          }
 
-            changeRow.innerHTML = `
-              <div class="field-tag">${fieldName}</div>
-              <div class="diff-container">
-                <div class="val-box val-old" title="Было">${oldText}</div>
-                <div class="arrow">→</div>
-                <div class="val-box val-new" title="Стало">${newText}</div>
+          card.innerHTML = `
+            <div class="log-header">
+              <div class="timestamp">
+                <strong>${timeStr}</strong>
+                <span class="time-ago">${agoStr}</span>
               </div>
-            `;
-            itemEl.appendChild(changeRow);
-          });
-
-          container.appendChild(itemEl);
-        });
-
-      } catch (e) {
-        container.innerHTML = `<div class="empty-state" style="color: red;">Ошибка чтения истории: ${e.message}</div>`;
+              <div class="sn-badge">SN: ${snStr}</div>
+            </div>
+            <div class="log-body">
+              ${changesHtml || '<span style="color:#aaa">Создание или инициализация записи</span>'}
+            </div>
+          `;
+          container.appendChild(card);
+        }
+      } catch (err) {
+        container.innerHTML = `<div class="no-data" style="color:red;">Ошибка обработки данных: ${err.message}</div>`;
       }
     });
   </script>
